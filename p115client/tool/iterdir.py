@@ -43,19 +43,20 @@ from iterutils import (
 )
 from iter_collect import iter_keyed_dups, SupportsLT
 from orjson import loads
-from p115client import check_response, normalize_attr, P115Client, P115OpenClient
+from p115client import check_response, P115Client, P115OpenClient
 from p115client.const import ID_TO_DIRNODE_CACHE
 from p115client.exception import (
     P115FileNotFoundError, P115OSError, P115Warning, 
 )
 from p115client.type import DirNode
+from p115client.util import posix_escape_name, share_extract_payload, unescape_115_charref
 from p115pickcode import pickcode_to_id, to_id
 from posixpatht import splitext
 
+from .attr import normalize_attr
 from .edit import update_desc, update_star, post_event
 from .fs_files import iter_fs_files
 from .life import iter_life_behavior_once, life_show
-from .util import posix_escape_name, share_extract_payload, unescape_115_charref
 
 
 @dataclass(frozen=True, unsafe_hash=True)

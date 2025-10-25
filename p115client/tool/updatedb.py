@@ -26,16 +26,16 @@ from iterutils import (
     with_iter_next, Yield, 
 )
 from orjson import dumps, loads
-from p115client import normalize_attr_simple, P115Client, P115Warning
+from p115client import P115Client, P115Warning
+from p115client.util import posix_escape_name
 from p115pickcode import to_id
 from posixpatht import path_is_dir_form, escape, splits
 from sqlitetools import connect, execute, find, query, upsert_items
 
-from .attr import get_ancestors
+from .attr import get_ancestors, normalize_attr_simple
 from .history import iter_history_list
 from .iterdir import iterdir, iter_nodes_using_event, traverse_tree
 from .life import iter_life_behavior_list
-from .util import posix_escape_name
 
 
 register_adapter(list, dumps)

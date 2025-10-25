@@ -93,7 +93,7 @@ from argparse import ArgumentParser, Namespace, RawTextHelpFormatter
 parser = ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
 parser.add_argument("-c", "--cookies", default="", help="cookies 字符串，优先级高于 -cp/--cookies-path")
 parser.add_argument("-cp", "--cookies-path", default="", help="cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt")
-parser.add_argument("-a", "--app-id", default=100195123, type=int, help="115 开放接口的 AppID，默认为：100195123")
+parser.add_argument("-a", "--app-id", default=100195125, type=int, help="115 开放接口的 AppID，默认为：100195125")
 parser.add_argument("-rt", "--refresh-token", default="", help="刷新令牌，如果传入此值，则可以不传 --cookies/--cookies-path/--app-id")
 parser.add_argument("-t", "--token", default="", help="签名所用的 token，如果提供，则请求必须携带签名，即 sign 查询参数")
 parser.add_argument("-H", "--host", default="0.0.0.0", help="ip 或 hostname，默认值：'0.0.0.0'")

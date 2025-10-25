@@ -19,7 +19,7 @@ from uvicorn import run
 
 # 授权登录
 cookies = "UID=...; CID=...; SEID=...; KID=..."
-app_id = 100195123
+app_id = 100195125
 client = P115Client(cookies, ensure_cookies=True, check_for_relogin=True)
 client.login_another_open(replace=True)
 # 或者直接用 refresh_token
@@ -138,7 +138,7 @@ options:
   -cp COOKIES_PATH, --cookies-path COOKIES_PATH
                         cookies 文件保存路径，默认为当前工作目录下的 115-cookies.txt
   -a APP_ID, --app-id APP_ID
-                        115 开放接口的 AppID，默认为：100195123
+                        115 开放接口的 AppID，默认为：100195125
   -rt REFRESH_TOKEN, --refresh-token REFRESH_TOKEN
                         刷新令牌，如果传入此值，则可以不传 --cookies/--cookies-path/--app-id
   -t TOKEN, --token TOKEN

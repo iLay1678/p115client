@@ -3,6 +3,8 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
+    "normalize_attr", "normalize_attr_simple", "normalize_attr_web", 
+    "normalize_attr_app", "normalize_attr_app2", 
     "type_of_attr", "get_attr", "get_info", "iter_list", 
     "get_ancestors", "get_path", "get_id", "get_id_to_path", 
     "get_id_to_sha1", "get_id_to_name", "share_get_id", 
@@ -11,8 +13,8 @@ __all__ = [
 __doc__ = "这个模块提供了一些和文件或目录信息有关的函数"
 
 from collections.abc import (
-    AsyncIterator, Callable, Coroutine, Iterator, Mapping, MutableMapping, 
-    Sequence, 
+    AsyncIterator, Callable, Coroutine, Iterable, Iterator, 
+    Mapping, MutableMapping, Sequence, 
 )
 from functools import partial
 from itertools import cycle, dropwhile
@@ -21,25 +23,572 @@ from os import PathLike
 from types import EllipsisType
 from typing import cast, overload, Any, Final, Literal
 
+from dictattr import AttrDict
 from dicttools import get_first
 from errno2 import errno
+from integer_tool import try_parse_int
 from iterutils import run_gen_step, run_gen_step_iter, with_iter_next, Yield
-from p115client import (
-    check_response, normalize_attr, normalize_attr_web, 
-    P115Client, P115OpenClient, 
-)
+from p115client import check_response, P115Client, P115OpenClient
 from p115client.const import CLASS_TO_TYPE, SUFFIX_TO_TYPE, ID_TO_DIRNODE_CACHE
 from p115client.exception import P115FileNotFoundError
 from p115client.type import P115ID
-from p115pickcode import to_id
-from posixpatht import path_is_dir_form, splitext, splits
-
-from .fs_files import iter_fs_files_serialized
-from .iterdir import overview_attr, iterdir, share_iterdir, update_resp_ancestors
-from .util import (
+from p115client.util import (
     posix_escape_name, share_extract_payload, unescape_115_charref, 
     is_valid_id, is_valid_sha1, is_valid_name, is_valid_pickcode, 
 )
+from p115pickcode import to_id
+from posixpatht import path_is_dir_form, splitext, splits
+
+
+@overload
+def normalize_attr_web(
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: None = None, 
+) -> dict[str, Any]:
+    ...
+@overload
+def normalize_attr_web[D: dict[str, Any]](
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: type[D], 
+) -> D:
+    ...
+def normalize_attr_web[D: dict[str, Any]](
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: None | type[D] = None, 
+) -> dict[str, Any] | D:
+    """翻译 ``P115Client.fs_files()``、``P115Client.fs_search()``、``P115Client.share_snap()`` 等方法响应的文件信息数据，使之便于阅读
+
+    :param info: 原始数据
+    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime", "type"
+    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
+    :param default: 一些预设值，可被覆盖
+    :param dict_cls: 字典类型
+
+    :return: 翻译后的 dict 类型数据
+    """
+    if dict_cls is None:
+        dict_cls = cast(type[D], dict)
+    attr: dict[str, Any] = dict_cls()
+    if default:
+        attr.update(default)
+    is_dir = attr["is_dir"] = "fid" not in info
+    if is_dir:
+        attr["id"] = int(info["cid"])        # category_id
+        attr["parent_id"] = int(info["pid"]) # parent_id
+    else:
+        attr["id"] = int(info["fid"])        # file_id
+        attr["parent_id"] = int(info["cid"]) # category_id
+    attr["name"] = info.get("n") or info["file_name"]
+    attr["sha1"] = info.get("sha") or ""
+    attr["size"] = int(info.get("s") or 0)
+    if "pc" in info:
+        attr["pickcode"] = info["pc"]
+    if simple:
+        if "c" in info:
+            attr["is_collect"] = int(info["c"])
+        if "tp" in info:
+            attr["ctime"] = int(info["tp"])
+        if "te" in info:
+            attr["mtime"] = int(info["te"])
+    else:
+        if "pickcode" in attr:
+            attr["pick_code"] = attr["pickcode"]
+        attr["ico"] = info.get("ico", "folder" if is_dir else "")
+        if "te" in info:
+            attr["mtime"] = attr["user_utime"] = int(info["te"])
+        if "tp" in info:
+            attr["ctime"] = attr["user_ptime"] = int(info["tp"])
+        if "to" in info:
+            attr["atime"] = attr["user_otime"] = int(info["to"])
+        if "tu" in info:
+            attr["utime"] = int(info["tu"])
+        if t := info.get("t"):
+            attr["time"] = try_parse_int(t)
+        if "fdes" in info:
+            val = info["fdes"]
+            if isinstance(val, str):
+                attr["desc"] = val
+            attr["has_desc"] = 1 if val else 0
+        for key, name in (
+            ("aid", "area_id"), 
+            ("audio_play_long", "audio_play_long"), 
+            ("c", "is_collect"), 
+            ("cc", "cover"), 
+            ("cc", "category_cover"), 
+            ("class", "class"), 
+            ("current_time", "current_time"), 
+            ("d", "has_desc"), 
+            ("dp", "dir_path"), 
+            ("e", "pick_expire"), 
+            ("fl", "labels"), 
+            ("hdf", "is_private"), 
+            ("is_top", "is_top"), 
+            ("ispl", "show_play_long"), 
+            ("issct", "is_shortcut"), 
+            ("iv", "is_video"), 
+            ("last_time", "last_time"), 
+            ("m", "is_mark"), 
+            ("m", "star"), 
+            ("ns", "name_show"), 
+            ("p", "has_pass"), 
+            ("play_long", "play_long"), 
+            ("played_end", "played_end"), 
+            ("pt", "pick_time"), 
+            ("score", "score"), 
+            ("sh", "is_share"), 
+            ("sta", "status"), 
+            ("style", "style"), 
+            ("u", "thumb"), 
+        ):
+            if key in info:
+                attr[name] = try_parse_int(info[key])
+        if vdi := info.get("vdi"):
+            attr["defination"] = vdi
+            match vdi:
+                case 1:
+                    attr["defination_str"] = "video-sd"
+                case 2:
+                    attr["defination_str"] = "video-hd"
+                case 3:
+                    attr["defination_str"] = "video-fhd"
+                case 4:
+                    attr["defination_str"] = "video-1080p"
+                case 5:
+                    attr["defination_str"] = "video-4k"
+                case 100:
+                    attr["defination_str"] = "video-origin"
+                case _:
+                    attr["defination_str"] = "video-sd"
+    if is_dir:
+        attr["type"] = 0
+    elif info.get("iv") or "vdi" in info:
+        attr["type"] = 4
+    elif type_ := CLASS_TO_TYPE.get(attr.get("class", "")):
+        attr["type"] = type_
+    elif type_ := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+        attr["type"] = type_
+    else:
+        attr["type"] = 99
+    if keep_raw:
+        attr["raw"] = info
+    return attr
+
+
+@overload
+def normalize_attr_app(
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: None = None, 
+) -> dict[str, Any]:
+    ...
+@overload
+def normalize_attr_app[D: dict[str, Any]](
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: type[D], 
+) -> D:
+    ...
+def normalize_attr_app[D: dict[str, Any]](
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: None | type[D] = None, 
+) -> dict[str, Any] | D:
+    """翻译 ``P115Client.fs_files_app()`` 方法响应的文件信息数据，使之便于阅读
+
+    :param info: 原始数据
+    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime", "type"
+    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
+    :param default: 一些预设值，可被覆盖
+    :param dict_cls: 字典类型
+
+    :return: 翻译后的 dict 类型数据
+    """
+    if dict_cls is None:
+        dict_cls = cast(type[D], dict)
+    attr: dict[str, Any] = dict_cls()
+    if default:
+        attr.update(default)
+    is_dir = attr["is_dir"] = info["fc"] == "0" # file_category
+    attr["id"] = int(info["fid"])               # file_id
+    attr["parent_id"] = int(info["pid"])        # parent_id
+    attr["name"] = info["fn"]
+    sha1 = attr["sha1"] = info.get("sha1") or ""
+    attr["size"] = int(info.get("fs") or 0)
+    if "pc" in info:
+        attr["pickcode"] = info["pc"]
+    if simple:
+        if "ic" in info:
+            attr["is_collect"] = int(info["ic"])
+        if "uppt" in info:
+            attr["ctime"] = int(info["uppt"])
+        if "upt" in info:
+            attr["mtime"] = int(info["upt"])
+    else:
+        if "pickcode" in attr:
+            attr["pick_code"] = attr["pickcode"]
+        attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
+        if "thumb" in info:
+            thumb = info["thumb"]
+            if thumb.startswith("?"):
+                thumb = f"https://imgjump.115.com{thumb}&size=0&sha1={sha1}"
+            attr["thumb"] = thumb
+        if "uppt" in info: # pptime
+            attr["ctime"] = attr["user_ptime"] = int(info["uppt"])
+        if "upt" in info: # ptime
+            attr["mtime"] = attr["user_utime"] = int(info["upt"])
+        if "uet" in info: # utime
+            attr["utime"] = int(info["uet"])
+        for key, name in (
+            ("aid", "area_id"),           # 域 id，表示文件的状态：1:正常 7:删除(回收站) 120:彻底删除
+            ("audio_play_long", "audio_play_long"), # 音频长度
+            ("current_time", "current_time"), # 视频当前播放位置（从头开始到此为第 `current_time` 秒）
+            ("d_img", "d_img"),           # 目录封面
+            ("def", "defination"),        # 视频清晰度：1:标清 2:高清 3:超清 4:1080P 5:4k 100:原画
+            ("def2", "defination2"),      # 视频清晰度：1:标清 2:高清 3:超清 4:1080P 5:4k 100:原画
+            ("fatr", "audio_play_long"),  # 音频长度
+            ("fco", "cover"),             # 目录封面
+            ("fco", "folder_cover"),      # 目录封面
+            ("fdesc", "desc"),            # 文件备注
+            ("fl", "labels"),             # 文件标签，得到 1 个字典列表
+            ("flabel", "fflabel"),        # 文件标签（一般为空）
+            ("fta", "status"),            # 文件状态：0/2:未上传完成，1:已上传完成
+            ("ftype", "file_type"),       # 文件类型代码
+            ("ic", "is_collect"),         # 是否违规
+            ("is_top", "is_top"),         # 是否置顶
+            ("ism", "is_mark"),           # 是否星标
+            ("ism", "star"),              # 是否星标（别名）
+            ("isp", "is_private"),        # 是否加密隐藏（隐藏模式中显示）
+            ("ispl", "show_play_long"),   # 是否统计目录下视频时长
+            ("iss", "is_share"),          # 是否共享
+            ("issct", "is_shortcut"),     # 是否在快捷入口
+            ("isv", "is_video"),          # 是否为视频
+            ("last_time", "last_time"),   # 视频上次播放时间戳（秒）
+            ("muc", "cover"),             # 封面
+            ("muc", "music_cover"),       # 音乐封面
+            ("multitrack", "multitrack"), # 音轨数量 
+            ("play_long", "play_long"),   # 音视频时长
+            ("played_end", "played_end"), # 是否播放完成
+            ("unzip_status", "unzip_status"), # 解压状态：0(或无值):未解压或已完成 1:解压中
+            ("uo", "source_url"),         # 原图地址
+            ("v_img", "video_img_url"),   # 图片封面
+        ):
+            if key in info:
+                attr[name] = try_parse_int(info[key])
+    if is_dir:
+        attr["type"] = 0
+    elif (thumb := info.get("thumb")) and thumb.startswith("?"):
+        attr["type"] = 2
+    elif "muc" in info:
+        attr["type"] = 3
+    elif info.get("isv") or "def" in info or "def2" in info or "v_img" in info:
+        attr["type"] = 4
+    elif type_ := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+        attr["type"] = type_
+    else:
+        attr["type"] = 99
+    if keep_raw:
+        attr["raw"] = info
+    return attr
+
+
+@overload
+def normalize_attr_app2(
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: None = None, 
+) -> dict[str, Any]:
+    ...
+@overload
+def normalize_attr_app2[D: dict[str, Any]](
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: type[D], 
+) -> D:
+    ...
+def normalize_attr_app2[D: dict[str, Any]](
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: None | type[D] = None, 
+) -> dict[str, Any] | D:
+    """翻译 ``P115Client.fs_files_app2()`` 方法响应的文件信息数据，使之便于阅读
+
+    :param info: 原始数据
+    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime", "type"
+    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
+    :param default: 一些预设值，可被覆盖
+    :param dict_cls: 字典类型
+
+    :return: 翻译后的 dict 类型数据
+    """
+    if dict_cls is None:
+        dict_cls = cast(type[D], dict)
+    attr: dict[str, Any] = dict_cls()
+    if default:
+        attr.update(default)
+    if "file_id" in info and "parent_id" in info:
+        if "file_category" in info:
+            is_dir = not int(info["file_category"])
+        else:
+            is_dir = bool(info.get("sha1") or info.get("file_sha1"))
+        attr["id"] = int(info["file_id"])
+        attr["parent_id"] = int(info["parent_id"])
+        attr["name"] = info["file_name"]
+    else:
+        if is_dir := "file_id" not in info:
+            attr["id"] = int(info["category_id"])
+            attr["parent_id"] = int(info["parent_id"])
+            attr["name"] = info["category_name"]
+        else:
+            attr["id"] = int(info["file_id"])
+            attr["parent_id"] = int(info["category_id"])
+            attr["name"] = info["file_name"]
+    attr["is_dir"] = is_dir
+    attr["sha1"] = info.get("sha1") or info.get("file_sha1") or ""
+    attr["size"] = int(info.get("file_size") or 0)
+    if "pick_code" in info:
+        attr["pickcode"] = info["pick_code"]
+    if simple:
+        if "is_collect" in info:
+            attr["is_collect"] = int(info["is_collect"])
+        if "user_pptime" in info:
+            attr["ctime"] = int(info["user_pptime"])
+        if "user_ptime" in info:
+            attr["mtime"] = int(info["user_ptime"])
+    else:
+        if "pickcode" in attr:
+            attr["pick_code"] = attr["pickcode"]
+        if is_dir:
+            if "thumb_url" in info:
+                attr["thumb"] = info["thumb_url"]
+            if "file_description" in info:
+                attr["desc"] = info["file_description"]
+            if "file_tag" in info:
+                attr["file_type"] = int(info["file_tag"])
+            if "music_cover" in info:
+                attr["cover"] = info["music_cover"]
+            if "user_pptime" in info:
+                attr["ctime"] = attr["user_ptime"] = int(info["user_pptime"])
+            if "user_ptime" in info:
+                attr["mtime"] = attr["user_utime"] = int(info["user_ptime"])
+            if "user_utime" in info:
+                attr["utime"] = int(info["user_utime"])
+        else:
+            if "category_desc" in info:
+                attr["desc"] = info["category_desc"]
+            if "category_cover" in info:
+                attr["cover"] = info["category_cover"]
+            if "pptime" in info:
+                attr["ctime"] = attr["user_ptime"] = int(info["pptime"])
+            if "ptime" in info:
+                attr["mtime"] = attr["user_utime"] = int(info["ptime"])
+            if "utime" in info:
+                attr["utime"] = int(info["utime"])
+        attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
+        if "fl" in info:
+            attr["labels"] = info["fl"]
+        for name in (
+            "area_id", 
+            "can_delete", 
+            "cate_mark", 
+            "category_file_count", 
+            "category_order", 
+            "current_time", 
+            "d_img", 
+            "definition", 
+            "definition2", 
+            "file_answer", 
+            "file_category", 
+            "file_eda", 
+            "file_question", 
+            "file_sort", 
+            "file_status", 
+            "has_desc", 
+            "has_pass", 
+            "is_collect", 
+            "is_mark", 
+            "is_private", 
+            "is_share", 
+            "is_top", 
+            "is_video", 
+            "last_time", 
+            "password", 
+            "pick_expire", 
+            "pick_time", 
+            "play_long", 
+            "play_url", 
+            "played_end", 
+            "show_play_long", 
+            "video_img_url", 
+        ):
+            if name in info:
+                attr[name] = try_parse_int(info[name])
+        if "is_mark" in attr:
+            attr["star"] = attr["is_mark"]
+    if is_dir:
+        attr["type"] = 0
+    elif "thumb_url" in info:
+        attr["type"] = 2
+    elif "music_cover" in info or "play_url" in info:
+        attr["type"] = 3
+    elif (
+        info.get("is_video") or 
+        "definition" in info or 
+        "definition2" in info or 
+        "video_img_url" in info
+    ):
+        attr["type"] = 4
+    elif type_ := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
+        attr["type"] = type_
+    else:
+        attr["type"] = 99
+    if keep_raw:
+        attr["raw"] = info
+    return attr
+
+
+@overload
+def normalize_attr(
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: None = None, 
+) -> AttrDict[str, Any]:
+    ...
+@overload
+def normalize_attr[D: dict[str, Any]](
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: type[D], 
+) -> D:
+    ...
+def normalize_attr[D: dict[str, Any]](
+    info: Mapping[str, Any], 
+    /, 
+    simple: bool = False, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: None | type[D] = None, 
+) -> AttrDict[str, Any] | D:
+    """翻译获取自罗列目录、搜索、获取文件信息等接口的数据，使之便于阅读
+
+    :param info: 原始数据
+    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime"
+    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
+    :param default: 一些预设值，可被覆盖
+    :param dict_cls: 字典类型
+
+    :return: 翻译后的 dict 类型数据
+    """
+    if "fn" in info:
+        call = normalize_attr_app
+    elif "file_id" in info or "category_id" in info:
+        call = normalize_attr_app2
+    else:
+        call = normalize_attr_web
+    if dict_cls is None:
+        return call(info, simple=simple, keep_raw=keep_raw, default=default, dict_cls=AttrDict)
+    else:
+        return call(info, simple=simple, keep_raw=keep_raw, default=default, dict_cls=dict_cls)
+
+
+@overload
+def normalize_attr_simple(
+    info: Mapping[str, Any], 
+    /, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: None = None, 
+) -> AttrDict[str, Any]:
+    ...
+@overload
+def normalize_attr_simple[D: dict[str, Any]](
+    info: Mapping[str, Any], 
+    /, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: type[D], 
+) -> D:
+    ...
+def normalize_attr_simple[D: dict[str, Any]](
+    info: Mapping[str, Any], 
+    /, 
+    keep_raw: bool = False, 
+    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
+    *, 
+    dict_cls: None | type[D] = None, 
+) -> AttrDict[str, Any] | D:
+    """翻译获取自罗列目录、搜索、获取文件信息等接口的数据，使之便于阅读
+
+    .. note::
+        只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime"
+
+    :param info: 原始数据
+    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
+    :param default: 一些预设值，可被覆盖
+    :param dict_cls: 字典类型
+
+    :return: 翻译后的 dict 类型数据
+    """
+    return normalize_attr(
+        info, 
+        simple=True, 
+        keep_raw=keep_raw, 
+        default=default, 
+        dict_cls=dict_cls, 
+    )
+
+
+from .fs_files import iter_fs_files_serialized
+from .iterdir import overview_attr, iterdir, share_iterdir, update_resp_ancestors
 
 
 get_webapi_origin: Final = cycle(("http://web.api.115.com", "https://webapi.115.com")).__next__

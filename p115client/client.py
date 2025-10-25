@@ -4,11 +4,7 @@
 from __future__ import annotations
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = [
-    "check_response", "normalize_attr", "normalize_attr_simple", 
-    "normalize_attr_web", "normalize_attr_app", "normalize_attr_app2", 
-    "ClientRequestMixin", "P115OpenClient", "P115Client", 
-]
+__all__ = ["check_response", "ClientRequestMixin", "P115OpenClient", "P115Client"]
 
 from asyncio import Lock as AsyncLock
 from base64 import b64encode
@@ -29,7 +25,6 @@ from operator import itemgetter
 from os import fsdecode, isatty, PathLike
 from pathlib import Path, PurePath
 from platform import system
-from posixpath import splitext
 from re import compile as re_compile, Match, MULTILINE
 from string import digits
 from sys import _getframe
@@ -43,7 +38,6 @@ from warnings import warn
 from argtools import argcount
 from asynctools import ensure_async
 from cookietools import cookies_to_dict, update_cookies
-from dictattr import AttrDict
 from dicttools import get_first, dict_update, dict_key_to_lower_merge, KeyLowerDict
 from errno2 import errno
 from filewrap import SupportsRead
@@ -54,7 +48,6 @@ from hashtools import (
 from http_request import complete_url as make_url, SupportsGeturl
 from http_response import get_status_code, get_total_length
 from httpfile import HTTPFileReader, AsyncHTTPFileReader
-from integer_tool import try_parse_int
 from iterutils import run_gen_step
 from orjson import dumps, loads
 from p115cipher import (
@@ -69,8 +62,8 @@ from temporary import temp_globals
 from yarl import URL
 
 from .const import (
-    _CACHE_DIR, CLASS_TO_TYPE, CLIENT_API_METHODS_MAP, CLIENT_METHOD_API_MAP, 
-    SSOENT_TO_APP, SUFFIX_TO_TYPE, 
+    _CACHE_DIR, CLIENT_API_METHODS_MAP, CLIENT_METHOD_API_MAP, 
+    SSOENT_TO_APP, 
 )
 from .exception import (
     AccessError, AccessTokenError, AuthenticationError, BusyOSError, 
@@ -79,6 +72,7 @@ from .exception import (
     P115FileNotFoundError, P115IsADirectoryError, 
 )
 from .type import P115Cookies, P115URL
+from .util import complete_url, share_extract_payload
 
 
 CRE_SET_COOKIE: Final = re_compile(r"[0-9a-f]{32}=[0-9a-f]{32}.*")
@@ -98,39 +92,6 @@ _default_k_ec = {"k_ec": ecdh_encode_token(0).decode()}
 _default_code_verifier = "0" * 64
 _default_code_challenge = b64encode(md5(b"0" * 64).digest()).decode()
 _default_code_challenge_method = "md5"
-
-
-def complete_url(
-    path: str | Callable[[], str], 
-    /, 
-    base_url: str | Callable[[], str] = "", 
-    app: str | Callable[[], str] = "", 
-) -> str:
-    if callable(path):
-        path = path()
-    if path and not path.startswith("/"):
-        path = "/" + path
-    if callable(base_url):
-        base_url = base_url()
-    if callable(app):
-        app = app()
-    elif app:
-        if path.startswith("/open/"):
-            app = ""
-        elif app not in (
-            "ios", "115ios", "android", "115android", "115ipad", 
-            "qandroid", "qios", "wechatmini", "alipaymini", "tv", 
-            "apple_tv", 
-        ):
-            app = "android"
-    if not base_url:
-        if app or path.startswith("/open/"):
-            base_url = "https://proapi.115.com"
-        else:
-            base_url = "https://webapi.115.com"
-    if app:
-        path = "/" + app + path
-    return base_url + path
 
 
 def json_loads(content: Buffer, /):
@@ -483,553 +444,6 @@ def check_response(resp: dict | Awaitable[dict], /) -> dict | Coroutine[Any, Any
             return check(await resp)
         return check_await()
     raise P115OSError(errno.EIO, resp)
-
-
-@overload
-def normalize_attr_web(
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: None = None, 
-) -> dict[str, Any]:
-    ...
-@overload
-def normalize_attr_web[D: dict[str, Any]](
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: type[D], 
-) -> D:
-    ...
-def normalize_attr_web[D: dict[str, Any]](
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: None | type[D] = None, 
-) -> dict[str, Any] | D:
-    """翻译 ``P115Client.fs_files()``、``P115Client.fs_search()``、``P115Client.share_snap()`` 等方法响应的文件信息数据，使之便于阅读
-
-    :param info: 原始数据
-    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime", "type"
-    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
-    :param default: 一些预设值，可被覆盖
-    :param dict_cls: 字典类型
-
-    :return: 翻译后的 dict 类型数据
-    """
-    if dict_cls is None:
-        dict_cls = cast(type[D], dict)
-    attr: dict[str, Any] = dict_cls()
-    if default:
-        attr.update(default)
-    is_dir = attr["is_dir"] = "fid" not in info
-    if is_dir:
-        attr["id"] = int(info["cid"])        # category_id
-        attr["parent_id"] = int(info["pid"]) # parent_id
-    else:
-        attr["id"] = int(info["fid"])        # file_id
-        attr["parent_id"] = int(info["cid"]) # category_id
-    attr["name"] = info.get("n") or info["file_name"]
-    attr["sha1"] = info.get("sha") or ""
-    attr["size"] = int(info.get("s") or 0)
-    if "pc" in info:
-        attr["pickcode"] = info["pc"]
-    if simple:
-        if "c" in info:
-            attr["is_collect"] = int(info["c"])
-        if "tp" in info:
-            attr["ctime"] = int(info["tp"])
-        if "te" in info:
-            attr["mtime"] = int(info["te"])
-    else:
-        if "pickcode" in attr:
-            attr["pick_code"] = attr["pickcode"]
-        attr["ico"] = info.get("ico", "folder" if is_dir else "")
-        if "te" in info:
-            attr["mtime"] = attr["user_utime"] = int(info["te"])
-        if "tp" in info:
-            attr["ctime"] = attr["user_ptime"] = int(info["tp"])
-        if "to" in info:
-            attr["atime"] = attr["user_otime"] = int(info["to"])
-        if "tu" in info:
-            attr["utime"] = int(info["tu"])
-        if t := info.get("t"):
-            attr["time"] = try_parse_int(t)
-        if "fdes" in info:
-            val = info["fdes"]
-            if isinstance(val, str):
-                attr["desc"] = val
-            attr["has_desc"] = 1 if val else 0
-        for key, name in (
-            ("aid", "area_id"), 
-            ("audio_play_long", "audio_play_long"), 
-            ("c", "is_collect"), 
-            ("cc", "cover"), 
-            ("cc", "category_cover"), 
-            ("class", "class"), 
-            ("current_time", "current_time"), 
-            ("d", "has_desc"), 
-            ("dp", "dir_path"), 
-            ("e", "pick_expire"), 
-            ("fl", "labels"), 
-            ("hdf", "is_private"), 
-            ("is_top", "is_top"), 
-            ("ispl", "show_play_long"), 
-            ("issct", "is_shortcut"), 
-            ("iv", "is_video"), 
-            ("last_time", "last_time"), 
-            ("m", "is_mark"), 
-            ("m", "star"), 
-            ("ns", "name_show"), 
-            ("p", "has_pass"), 
-            ("play_long", "play_long"), 
-            ("played_end", "played_end"), 
-            ("pt", "pick_time"), 
-            ("score", "score"), 
-            ("sh", "is_share"), 
-            ("sta", "status"), 
-            ("style", "style"), 
-            ("u", "thumb"), 
-        ):
-            if key in info:
-                attr[name] = try_parse_int(info[key])
-        if vdi := info.get("vdi"):
-            attr["defination"] = vdi
-            match vdi:
-                case 1:
-                    attr["defination_str"] = "video-sd"
-                case 2:
-                    attr["defination_str"] = "video-hd"
-                case 3:
-                    attr["defination_str"] = "video-fhd"
-                case 4:
-                    attr["defination_str"] = "video-1080p"
-                case 5:
-                    attr["defination_str"] = "video-4k"
-                case 100:
-                    attr["defination_str"] = "video-origin"
-                case _:
-                    attr["defination_str"] = "video-sd"
-    if is_dir:
-        attr["type"] = 0
-    elif info.get("iv") or "vdi" in info:
-        attr["type"] = 4
-    elif type_ := CLASS_TO_TYPE.get(attr.get("class", "")):
-        attr["type"] = type_
-    elif type_ := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
-        attr["type"] = type_
-    else:
-        attr["type"] = 99
-    if keep_raw:
-        attr["raw"] = info
-    return attr
-
-
-@overload
-def normalize_attr_app(
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: None = None, 
-) -> dict[str, Any]:
-    ...
-@overload
-def normalize_attr_app[D: dict[str, Any]](
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: type[D], 
-) -> D:
-    ...
-def normalize_attr_app[D: dict[str, Any]](
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: None | type[D] = None, 
-) -> dict[str, Any] | D:
-    """翻译 ``P115Client.fs_files_app()`` 方法响应的文件信息数据，使之便于阅读
-
-    :param info: 原始数据
-    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime", "type"
-    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
-    :param default: 一些预设值，可被覆盖
-    :param dict_cls: 字典类型
-
-    :return: 翻译后的 dict 类型数据
-    """
-    if dict_cls is None:
-        dict_cls = cast(type[D], dict)
-    attr: dict[str, Any] = dict_cls()
-    if default:
-        attr.update(default)
-    is_dir = attr["is_dir"] = info["fc"] == "0" # file_category
-    attr["id"] = int(info["fid"])               # file_id
-    attr["parent_id"] = int(info["pid"])        # parent_id
-    attr["name"] = info["fn"]
-    sha1 = attr["sha1"] = info.get("sha1") or ""
-    attr["size"] = int(info.get("fs") or 0)
-    if "pc" in info:
-        attr["pickcode"] = info["pc"]
-    if simple:
-        if "ic" in info:
-            attr["is_collect"] = int(info["ic"])
-        if "uppt" in info:
-            attr["ctime"] = int(info["uppt"])
-        if "upt" in info:
-            attr["mtime"] = int(info["upt"])
-    else:
-        if "pickcode" in attr:
-            attr["pick_code"] = attr["pickcode"]
-        attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
-        if "thumb" in info:
-            thumb = info["thumb"]
-            if thumb.startswith("?"):
-                thumb = f"https://imgjump.115.com{thumb}&size=0&sha1={sha1}"
-            attr["thumb"] = thumb
-        if "uppt" in info: # pptime
-            attr["ctime"] = attr["user_ptime"] = int(info["uppt"])
-        if "upt" in info: # ptime
-            attr["mtime"] = attr["user_utime"] = int(info["upt"])
-        if "uet" in info: # utime
-            attr["utime"] = int(info["uet"])
-        for key, name in (
-            ("aid", "area_id"),           # 域 id，表示文件的状态：1:正常 7:删除(回收站) 120:彻底删除
-            ("audio_play_long", "audio_play_long"), # 音频长度
-            ("current_time", "current_time"), # 视频当前播放位置（从头开始到此为第 `current_time` 秒）
-            ("d_img", "d_img"),           # 目录封面
-            ("def", "defination"),        # 视频清晰度：1:标清 2:高清 3:超清 4:1080P 5:4k 100:原画
-            ("def2", "defination2"),      # 视频清晰度：1:标清 2:高清 3:超清 4:1080P 5:4k 100:原画
-            ("fatr", "audio_play_long"),  # 音频长度
-            ("fco", "cover"),             # 目录封面
-            ("fco", "folder_cover"),      # 目录封面
-            ("fdesc", "desc"),            # 文件备注
-            ("fl", "labels"),             # 文件标签，得到 1 个字典列表
-            ("flabel", "fflabel"),        # 文件标签（一般为空）
-            ("fta", "status"),            # 文件状态：0/2:未上传完成，1:已上传完成
-            ("ftype", "file_type"),       # 文件类型代码
-            ("ic", "is_collect"),         # 是否违规
-            ("is_top", "is_top"),         # 是否置顶
-            ("ism", "is_mark"),           # 是否星标
-            ("ism", "star"),              # 是否星标（别名）
-            ("isp", "is_private"),        # 是否加密隐藏（隐藏模式中显示）
-            ("ispl", "show_play_long"),   # 是否统计目录下视频时长
-            ("iss", "is_share"),          # 是否共享
-            ("issct", "is_shortcut"),     # 是否在快捷入口
-            ("isv", "is_video"),          # 是否为视频
-            ("last_time", "last_time"),   # 视频上次播放时间戳（秒）
-            ("muc", "cover"),             # 封面
-            ("muc", "music_cover"),       # 音乐封面
-            ("multitrack", "multitrack"), # 音轨数量 
-            ("play_long", "play_long"),   # 音视频时长
-            ("played_end", "played_end"), # 是否播放完成
-            ("unzip_status", "unzip_status"), # 解压状态：0(或无值):未解压或已完成 1:解压中
-            ("uo", "source_url"),         # 原图地址
-            ("v_img", "video_img_url"),   # 图片封面
-        ):
-            if key in info:
-                attr[name] = try_parse_int(info[key])
-    if is_dir:
-        attr["type"] = 0
-    elif (thumb := info.get("thumb")) and thumb.startswith("?"):
-        attr["type"] = 2
-    elif "muc" in info:
-        attr["type"] = 3
-    elif info.get("isv") or "def" in info or "def2" in info or "v_img" in info:
-        attr["type"] = 4
-    elif type_ := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
-        attr["type"] = type_
-    else:
-        attr["type"] = 99
-    if keep_raw:
-        attr["raw"] = info
-    return attr
-
-
-@overload
-def normalize_attr_app2(
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: None = None, 
-) -> dict[str, Any]:
-    ...
-@overload
-def normalize_attr_app2[D: dict[str, Any]](
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: type[D], 
-) -> D:
-    ...
-def normalize_attr_app2[D: dict[str, Any]](
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: None | type[D] = None, 
-) -> dict[str, Any] | D:
-    """翻译 ``P115Client.fs_files_app2()`` 方法响应的文件信息数据，使之便于阅读
-
-    :param info: 原始数据
-    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime", "type"
-    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
-    :param default: 一些预设值，可被覆盖
-    :param dict_cls: 字典类型
-
-    :return: 翻译后的 dict 类型数据
-    """
-    if dict_cls is None:
-        dict_cls = cast(type[D], dict)
-    attr: dict[str, Any] = dict_cls()
-    if default:
-        attr.update(default)
-    if "file_id" in info and "parent_id" in info:
-        if "file_category" in info:
-            is_dir = not int(info["file_category"])
-        else:
-            is_dir = bool(info.get("sha1") or info.get("file_sha1"))
-        attr["id"] = int(info["file_id"])
-        attr["parent_id"] = int(info["parent_id"])
-        attr["name"] = info["file_name"]
-    else:
-        if is_dir := "file_id" not in info:
-            attr["id"] = int(info["category_id"])
-            attr["parent_id"] = int(info["parent_id"])
-            attr["name"] = info["category_name"]
-        else:
-            attr["id"] = int(info["file_id"])
-            attr["parent_id"] = int(info["category_id"])
-            attr["name"] = info["file_name"]
-    attr["is_dir"] = is_dir
-    attr["sha1"] = info.get("sha1") or info.get("file_sha1") or ""
-    attr["size"] = int(info.get("file_size") or 0)
-    if "pick_code" in info:
-        attr["pickcode"] = info["pick_code"]
-    if simple:
-        if "is_collect" in info:
-            attr["is_collect"] = int(info["is_collect"])
-        if "user_pptime" in info:
-            attr["ctime"] = int(info["user_pptime"])
-        if "user_ptime" in info:
-            attr["mtime"] = int(info["user_ptime"])
-    else:
-        if "pickcode" in attr:
-            attr["pick_code"] = attr["pickcode"]
-        if is_dir:
-            if "thumb_url" in info:
-                attr["thumb"] = info["thumb_url"]
-            if "file_description" in info:
-                attr["desc"] = info["file_description"]
-            if "file_tag" in info:
-                attr["file_type"] = int(info["file_tag"])
-            if "music_cover" in info:
-                attr["cover"] = info["music_cover"]
-            if "user_pptime" in info:
-                attr["ctime"] = attr["user_ptime"] = int(info["user_pptime"])
-            if "user_ptime" in info:
-                attr["mtime"] = attr["user_utime"] = int(info["user_ptime"])
-            if "user_utime" in info:
-                attr["utime"] = int(info["user_utime"])
-        else:
-            if "category_desc" in info:
-                attr["desc"] = info["category_desc"]
-            if "category_cover" in info:
-                attr["cover"] = info["category_cover"]
-            if "pptime" in info:
-                attr["ctime"] = attr["user_ptime"] = int(info["pptime"])
-            if "ptime" in info:
-                attr["mtime"] = attr["user_utime"] = int(info["ptime"])
-            if "utime" in info:
-                attr["utime"] = int(info["utime"])
-        attr["ico"] = info.get("ico", "folder" if attr["is_dir"] else "")
-        if "fl" in info:
-            attr["labels"] = info["fl"]
-        for name in (
-            "area_id", 
-            "can_delete", 
-            "cate_mark", 
-            "category_file_count", 
-            "category_order", 
-            "current_time", 
-            "d_img", 
-            "definition", 
-            "definition2", 
-            "file_answer", 
-            "file_category", 
-            "file_eda", 
-            "file_question", 
-            "file_sort", 
-            "file_status", 
-            "has_desc", 
-            "has_pass", 
-            "is_collect", 
-            "is_mark", 
-            "is_private", 
-            "is_share", 
-            "is_top", 
-            "is_video", 
-            "last_time", 
-            "password", 
-            "pick_expire", 
-            "pick_time", 
-            "play_long", 
-            "play_url", 
-            "played_end", 
-            "show_play_long", 
-            "video_img_url", 
-        ):
-            if name in info:
-                attr[name] = try_parse_int(info[name])
-        if "is_mark" in attr:
-            attr["star"] = attr["is_mark"]
-    if is_dir:
-        attr["type"] = 0
-    elif "thumb_url" in info:
-        attr["type"] = 2
-    elif "music_cover" in info or "play_url" in info:
-        attr["type"] = 3
-    elif (
-        info.get("is_video") or 
-        "definition" in info or 
-        "definition2" in info or 
-        "video_img_url" in info
-    ):
-        attr["type"] = 4
-    elif type_ := SUFFIX_TO_TYPE.get(splitext(attr["name"])[1].lower()):
-        attr["type"] = type_
-    else:
-        attr["type"] = 99
-    if keep_raw:
-        attr["raw"] = info
-    return attr
-
-
-@overload
-def normalize_attr(
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: None = None, 
-) -> AttrDict[str, Any]:
-    ...
-@overload
-def normalize_attr[D: dict[str, Any]](
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: type[D], 
-) -> D:
-    ...
-def normalize_attr[D: dict[str, Any]](
-    info: Mapping[str, Any], 
-    /, 
-    simple: bool = False, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: None | type[D] = None, 
-) -> AttrDict[str, Any] | D:
-    """翻译获取自罗列目录、搜索、获取文件信息等接口的数据，使之便于阅读
-
-    :param info: 原始数据
-    :param simple: 只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime"
-    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
-    :param default: 一些预设值，可被覆盖
-    :param dict_cls: 字典类型
-
-    :return: 翻译后的 dict 类型数据
-    """
-    if "fn" in info:
-        call = normalize_attr_app
-    elif "file_id" in info or "category_id" in info:
-        call = normalize_attr_app2
-    else:
-        call = normalize_attr_web
-    if dict_cls is None:
-        return call(info, simple=simple, keep_raw=keep_raw, default=default, dict_cls=AttrDict)
-    else:
-        return call(info, simple=simple, keep_raw=keep_raw, default=default, dict_cls=dict_cls)
-
-
-@overload
-def normalize_attr_simple(
-    info: Mapping[str, Any], 
-    /, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: None = None, 
-) -> AttrDict[str, Any]:
-    ...
-@overload
-def normalize_attr_simple[D: dict[str, Any]](
-    info: Mapping[str, Any], 
-    /, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: type[D], 
-) -> D:
-    ...
-def normalize_attr_simple[D: dict[str, Any]](
-    info: Mapping[str, Any], 
-    /, 
-    keep_raw: bool = False, 
-    default: None | Mapping[str, Any] | Iterable[tuple[str, Any]] = None, 
-    *, 
-    dict_cls: None | type[D] = None, 
-) -> AttrDict[str, Any] | D:
-    """翻译获取自罗列目录、搜索、获取文件信息等接口的数据，使之便于阅读
-
-    .. note::
-        只提取少量必要字段 "is_dir", "id", "parent_id", "name", "sha1", "size", "pickcode", "is_collect", "ctime", "mtime"
-
-    :param info: 原始数据
-    :param keep_raw: 是否保留原始数据，如果为 True，则保存到 "raw" 字段
-    :param default: 一些预设值，可被覆盖
-    :param dict_cls: 字典类型
-
-    :return: 翻译后的 dict 类型数据
-    """
-    return normalize_attr(
-        info, 
-        simple=True, 
-        keep_raw=keep_raw, 
-        default=default, 
-        dict_cls=dict_cls, 
-    )
 
 
 class ClientRequestMixin:
@@ -1875,7 +1289,7 @@ class ClientRequestMixin:
 
                 from p115client import P115Client
 
-                app_id = 100195123
+                app_id = 100195125
                 response = P115Client.login_qrcode_token_open(app_id)
                 if response["code"]:
                     print("无效 AppID:", app_id, "因为:", response["error"])
@@ -1891,7 +1305,7 @@ class ClientRequestMixin:
                 from p115client import P115Client
 
                 get_qrcode_token = P115Client.login_qrcode_token_open
-                for app_id in count(100195123, 2):
+                for app_id in count(100195125, 2):
                     response = get_qrcode_token(app_id)
                     if not response["code"]:
                         print(app_id)
@@ -2154,7 +1568,7 @@ class ClientRequestMixin:
     def login_with_app_id(
         cls, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         console_qrcode: bool = True, 
         base_url: str | Callable[[], str] = "https://qrcodeapi.115.com", 
         *, 
@@ -2167,7 +1581,7 @@ class ClientRequestMixin:
     def login_with_app_id(
         cls, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         console_qrcode: bool = True, 
         base_url: str | Callable[[], str] = "https://qrcodeapi.115.com", 
         *, 
@@ -2179,7 +1593,7 @@ class ClientRequestMixin:
     def login_with_app_id(
         cls, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         console_qrcode: bool = True, 
         base_url: str | Callable[[], str] = "https://qrcodeapi.115.com", 
         *, 
@@ -2864,7 +2278,7 @@ class P115OpenClient(ClientRequestMixin):
             resp = self.fs_files({"show_dir": 1, "limit": 1, "cid": 0})
             check_response(resp)
             info = resp["data"][0]
-            point = cache[user_id] = get_stable_point(normalize_attr(info)["pickcode"])
+            point = cache[user_id] = get_stable_point(info["pc"])
             try:
                 pickcode_points_json.open("wb").write(dumps(cache))
             except Exception:
@@ -4207,7 +3621,7 @@ class P115OpenClient(ClientRequestMixin):
             https://www.yuque.com/115yun/open/av2mluz7uwigz74k
 
         :payload:
-            - page: int | str = 1
+            - page: int = 1
         """
         api = complete_url("/open/offline/get_task_list", base_url)
         if isinstance(payload, int):
@@ -4708,18 +4122,22 @@ class P115OpenClient(ClientRequestMixin):
         :param read_range_bytes_or_hash: 调用以获取 2 次验证的数据或计算 sha1，接受一个数据范围，格式符合:
             `HTTP Range Requests <https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests>`_，
             返回值如果是 str，则视为计算好的 sha1，如果为 Buffer，则视为数据（之后会被计算 sha1）
-        :param pid: 上传文件到此目录的 id
+        :param pid: 上传文件到此目录的 id，或者指定的 target（格式为 f"U_{aid}_{pid}"，例如一次性封面上传目标 "U_3_-15"）
         :param async_: 是否异步
         :param request_kwargs: 其余请求参数
 
         :return: 接口响应
         """
         def gen_step():
+            if isinstance(pid, str) and pid.startswith("U_"):
+                target = pid
+            else:
+                target = f"U_1_{pid}"
             payload = {
                 "file_name": filename, 
                 "fileid": filesha1.upper(), 
                 "file_size": filesize, 
-                "target": f"U_1_{pid}", 
+                "target": target, 
                 "topupload": 1, 
             }
             resp = yield self.upload_init_open(
@@ -4816,7 +4234,7 @@ class P115OpenClient(ClientRequestMixin):
             ``partsize > 0`` 时，不要把 ``partsize`` 设置得太小，起码得 10 MB (10485760) 以上
 
         :param file: 待上传的文件
-        :param pid: 上传文件到此目录的 id 或 pickcode
+        :param pid: 上传文件到此目录的 id 或 pickcode，或者指定的 target（格式为 f"U_{aid}_{pid}"，例如一次性封面上传目标 "U_3_-15"）
         :param filename: 文件名，如果为空，则会自动确定
         :param filesha1: 文件的 sha1，如果为空，则会自动确定
         :param filesize: 文件大小，如果为 -1，则会自动确定
@@ -4833,9 +4251,11 @@ class P115OpenClient(ClientRequestMixin):
             request_kwargs.get("headers") or (), 
             authorization=self.headers["authorization"], 
         )
+        if isinstance(pid, str) and not pid.startswith("U_"):
+            pid = self.to_id(pid)
         return upload(
             file=file, 
-            pid=self.to_id(pid), 
+            pid=pid, 
             filename=filename, 
             filesha1=filesha1, 
             filesize=filesize, 
@@ -5546,7 +4966,7 @@ class P115Client(P115OpenClient):
     def login_info_open(
         self, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         *, 
         async_: Literal[False] = False, 
         **request_kwargs, 
@@ -5556,7 +4976,7 @@ class P115Client(P115OpenClient):
     def login_info_open(
         self, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         *, 
         async_: Literal[True], 
         **request_kwargs, 
@@ -5565,7 +4985,7 @@ class P115Client(P115OpenClient):
     def login_info_open(
         self, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         *, 
         async_: Literal[False, True] = False, 
         **request_kwargs, 
@@ -5596,7 +5016,7 @@ class P115Client(P115OpenClient):
     def login_with_open(
         self, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         *, 
         show_warning: bool = False, 
         async_: Literal[False] = False, 
@@ -5607,7 +5027,7 @@ class P115Client(P115OpenClient):
     def login_with_open(
         self, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         *, 
         show_warning: bool = False, 
         async_: Literal[True], 
@@ -5617,7 +5037,7 @@ class P115Client(P115OpenClient):
     def login_with_open(
         self, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         *, 
         show_warning: bool = False, 
         async_: Literal[False, True] = False, 
@@ -5801,7 +5221,7 @@ class P115Client(P115OpenClient):
     def login_another_open(
         self, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         *, 
         replace: Literal[True] | Self, 
         show_warning: bool = False, 
@@ -5813,7 +5233,7 @@ class P115Client(P115OpenClient):
     def login_another_open(
         self, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         *, 
         replace: Literal[True] | Self, 
         show_warning: bool = False, 
@@ -5825,7 +5245,7 @@ class P115Client(P115OpenClient):
     def login_another_open(
         self, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         *, 
         replace: Literal[False] = False, 
         show_warning: bool = False, 
@@ -5837,7 +5257,7 @@ class P115Client(P115OpenClient):
     def login_another_open(
         self, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         *, 
         replace: Literal[False] = False, 
         show_warning: bool = False, 
@@ -5848,7 +5268,7 @@ class P115Client(P115OpenClient):
     def login_another_open(
         self, 
         /, 
-        app_id: int | str = 100195123, 
+        app_id: int | str = 100195125, 
         *, 
         replace: bool | Self = False, 
         show_warning: bool = False, 
@@ -10254,6 +9674,9 @@ class P115Client(P115OpenClient):
 
         GET https://webapi.115.com/files/get_info
 
+        .. caution::
+            虽然即使文件被删除（aid=120），也可以获取它的信息，但是如果文件被上传到特殊位置（例如 aid=3 或 target=U_3_-15），则会报错，但却可以用 `client.fs_file_skim` 或 `client.fs_supervision` 获取其信息
+
         :payload:
             - file_id: int | str 💡 文件或目录的 id，不能为 0，只能传 1 个 id，如果有多个只采用第一个
         """
@@ -10948,7 +10371,7 @@ class P115Client(P115OpenClient):
             - cid: int | str     💡 目录 id，对应 parent_id
             - file_id: int | str 💡 不能是 0，可以不同于 `cid`，必须是任何一个有效的 id（单纯是被检查一下）
             - limit: int = <default> 💡 最多返回数量
-            - offset: int = 0    💡 索引偏移，索引从 0 开始计算
+            - offset: int = 0 💡 索引偏移，索引从 0 开始计算
             - is_asc: 0 | 1 = <default> 💡 是否升序排列
             - next: 0 | 1 = <default>
             - order: str = <default> 💡 用某字段排序
@@ -12734,8 +12157,8 @@ class P115Client(P115OpenClient):
             - sort: "name" | "update_time" | "create_time" = <default> 💡 排序字段
 
                 - 名称: "name"
-                - 创建时间: "create_time"
-                - 更新时间: "update_time"
+                - 添加时间: "create_time"
+                - 修改时间: "update_time"
 
             - order: "asc" | "desc" = <default> 💡 排序顺序："asc"(升序), "desc"(降序)
         """
@@ -16827,6 +16250,54 @@ class P115Client(P115OpenClient):
         payload = {"limit": 1_000, "show_type": 0, "start": 0, **payload}
         return self.request(url=api, params=payload, async_=async_, **request_kwargs)
 
+    @overload
+    def life_recent_browse(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "web", 
+        base_url: str | Callable[[], str] = "https://life.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def life_recent_browse(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "web", 
+        base_url: str | Callable[[], str] = "https://life.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def life_recent_browse(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        app: str = "web", 
+        base_url: str | Callable[[], str] = "https://life.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """获取最近浏览记录
+
+        GET https://life.115.com/api/1.0/web/1.0/life/recent_browse
+
+        :payload:
+            - start: int = 0
+            - limit: int = 1000
+        """
+        api = complete_url(f"/api/1.0/{app}/1.0/life/recent_browse", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"start": payload}
+        payload.setdefault("limit", 1000)
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
     ########## Login API ##########
 
     @overload
@@ -17600,9 +17071,955 @@ class P115Client(P115OpenClient):
         """获取 websocket 链接
 
         GET https://msg.115.com/?ct=im&ac=get_websocket_host
+
+        .. note::
+            用返回数据构造链接，可由此监听 websocket 消息
+
+            `wss://{server}/?uid={user_id}&session={session_id}&client_version=100&client_type=5&sequence_id=0&source=web&device_id=0000000000000000000000000000000000000000`
         """
         api = complete_url("/?ct=im&ac=get_websocket_host", base_url=base_url)
         return self.request(url=api, async_=async_, **request_kwargs)
+
+    ########## Multimedia API ##########
+
+    @overload
+    def multimedia_collection_listen(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_collection_listen(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_collection_listen(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听：自建听单列表
+
+        GET https://webapi.115.com/multimedia/collection_listen
+
+        .. todo::
+            暂不清楚 `sort` 字段各个取值的含义
+
+        :payload:
+            - channel_id: int = 1
+            - limit: int = 32
+            - offset: int = 0
+            - sort: int = <default> 💡 排序依据
+            - asc: 0 | 1 = <default> 💡 是否升序排列
+        """
+        api = complete_url("/multimedia/collection_listen", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"offset": payload}
+        payload = {"channel_id": 1, "limit": 32, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_collection_listen_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_collection_listen_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_collection_listen_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听：设置听单
+
+        POST https://webapi.115.com/multimedia/collection_listen
+
+        :payload:
+            - multimedia_id: int 💡 专辑/详情 id
+            - channel_id: int = 1
+            - collection: 0 | 1 = 1 💡 是否设为听单：0:取消 1:设置（设为听单后，该内容将出现在自建听单列表中）
+        """
+        api = complete_url("/multimedia/collection_listen", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"multimedia_id": payload}
+        payload = {"channel_id": 1, "collection": 1, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_collection_watch(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_collection_watch(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_collection_watch(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我看：自建合集列表
+
+        GET https://webapi.115.com/multimedia/collection_watch
+
+        .. todo::
+            暂不清楚 `sort` 字段各个取值的含义
+
+        :payload:
+            - channel_id: int = 5
+            - limit: int = 32
+            - offset: int = 0
+            - sort: int = <default> 💡 排序依据
+            - asc: 0 | 1 = <default> 💡 是否升序排列
+        """
+        api = complete_url("/multimedia/collection_watch", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"offset": payload}
+        payload = {"channel_id": 5, "limit": 32, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_collection_watch_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_collection_watch_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_collection_watch_set(
+        self, 
+        payload: int | dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我看：设置合集
+
+        POST https://webapi.115.com/multimedia/collection_watch
+
+        :payload:
+            - multimedia_id: int 💡 专辑/详情 id
+            - channel_id: int = 5
+            - collection: 0 | 1 = 1 💡 是否设为合集：0:取消 1:设置（设为合集后，该内容将出现在自建合集列表中）
+        """
+        api = complete_url("/multimedia/collection_watch", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"multimedia_id": payload}
+        payload = {"channel_id": 5, "collection": 1, **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_listen(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_listen(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_listen(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听：专辑/详情列表 或 专辑/详情的基本信息和文件列表
+
+        GET https://webapi.115.com/multimedia/listen
+
+        .. note::
+            - 指定 `multimedia_id`，则罗列此专辑/详情的基本信息和文件列表
+            - 指定 `parent_id`，则罗列关联此 id 的专辑/详情列表
+            - 都不指定，则罗列所有专辑/详情列表
+
+        .. todo::
+            暂不清楚 `sort` 字段各个取值的含义
+
+        .. todo::
+            暂不清楚 `date` 字段的格式要求
+
+        .. todo::
+            应该还可以选择【维度】和【时间区间】，但是目前 115 的网页版还未完成此功能
+
+        :payload:
+            - channel_id: int = 1
+            - parent_id: int = <default> 💡 关联的专辑/详情 id
+            - multimedia_id: int = <default> 💡 专辑/详情 id
+            - limit: int = <default> 💡 最多返回数量
+            - offset: int = <default> 💡 索引偏移，索引从 0 开始计算
+            - sort: int = <default> 💡 排序依据
+            - asc: 0 | 1 = <default> 💡 是否升序排列
+            - visit_type: int = <default> 💡 已知：0:全部 1:已经听过 2:还未听过
+            - type_id: int = <default> 💡 分类 id
+            - related_name: str = <default> 💡 相关人员名称
+            - collection: 0 | 1 = <default> 💡 内容类型：<default>:全部 0:属性 1:合集
+            - date: str = <default> 💡 日期、月份或者年份
+        """
+        api = complete_url("/multimedia/listen", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"multimedia_id": payload}
+        payload = {"channel_id": 1, "limit": 32, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_listen_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_listen_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_listen_update(
+        self, 
+        payload: dict | list, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听：更新专辑/详情
+
+        POST https://webapi.115.com/multimedia/listen
+
+        :payload:
+            - multimedia_id: int 💡 专辑/详情 id
+            - channel_id: int = 1
+            - parent_id: int = <default> 💡 关联的专辑/详情 id（作为当前专辑/详情的上级）
+            - title: str = <default> 💡 标题
+            - description: str = <default> 💡 简介
+            - cover: str = <default> 💡 封面图片的提取码
+            - country: str = <default> 💡 国家/地区
+            - language: str = <default> 💡 语言，多个用逗号 "," 隔开
+            - release_date: str = <default> 💡 发行日期，格式为 YYYY-MM-DD
+            - type_id: int | str = <default> 💡 类型 id
+            - type_id[]: int | str
+            - ...
+            - type_id[0]: int | str
+            - type_id[1]: int | str
+            - ...
+            - related_id[][{related_id}]: str 💡 相关人员，是 id 到 名字 的映射关系
+            - ...
+            - rating[1]: int | float | str = <default> 💡 评分：豆瓣
+            - rating[2]: int | float | str = <default> 💡 评分：猫眼
+            - rating[3]: int | float | str = <default> 💡 评分：烂番茄
+            - rating[4]: int | float | str = <default> 💡 评分：优酷
+            - rating[5]: int | float | str = <default> 💡 评分：115
+            - rating[6]: int | float | str = <default> 💡 评分：IMDB
+            - extra_info: str = <default> 💡 附加信息，是一个 JSON object 序列化为字符串，初始值为 '{"version":"","timbre":"","track":"","scene":""}'
+            - is_delete: 0 | 1 = <default> 💡 是否删除
+        """
+        api = complete_url("/multimedia/listen", base_url=base_url)
+        if isinstance(payload, dict):
+            payload.setdefault("channel_id", 1)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_watch(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_watch(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_watch(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我看：专辑/详情列表 或 专辑/详情的基本信息和文件列表
+
+        GET https://webapi.115.com/multimedia/watch
+
+        .. note::
+            - 指定 `multimedia_id`，则罗列此专辑/详情的基本信息和文件列表
+            - 指定 `parent_id`，则罗列关联此 id 的专辑/详情列表
+            - 都不指定，则罗列所有专辑/详情列表
+
+        .. todo::
+            暂不清楚 `sort` 字段各个取值的含义
+
+        .. todo::
+            暂不清楚 `date` 字段的格式要求
+
+        .. todo::
+            应该还可以选择【维度】和【时间区间】，但是目前 115 的网页版还未完成此功能
+
+        :payload:
+            - channel_id: int = 5
+            - parent_id: int = <default> 💡 关联的专辑/详情 id
+            - multimedia_id: int = <default> 💡 专辑/详情 id
+            - limit: int = <default> 💡 最多返回数量
+            - offset: int = <default> 💡 索引偏移，索引从 0 开始计算
+            - sort: int = <default> 💡 排序依据
+            - asc: 0 | 1 = <default> 💡 是否升序排列
+            - visit_type: int = <default> 💡 已知：0:全部 1:已经听过 2:还未听过
+            - type_id: int = <default> 💡 分类 id
+            - related_name: str = <default> 💡 相关人员名称
+            - collection: 0 | 1 = <default> 💡 内容类型：<default>:全部 0:属性 1:合集
+            - date: str = <default> 💡 日期、月份或者年份
+        """
+        api = complete_url("/multimedia/watch", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"multimedia_id": payload}
+        payload = {"channel_id": 5, "limit": 32, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_watch_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_watch_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_watch_update(
+        self, 
+        payload: dict | list, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我看：更新专辑/详情
+
+        POST https://webapi.115.com/multimedia/watch
+
+        :payload:
+            - multimedia_id: int 💡 专辑/详情 id
+            - channel_id: int = 5
+            - parent_id: int = <default> 💡 关联的专辑/详情 id（作为当前专辑/详情的上级）
+            - title: str = <default> 💡 标题
+            - description: str = <default> 💡 简介
+            - cover: str = <default> 💡 封面图片的提取码
+            - country: str = <default> 💡 国家/地区
+            - language: str = <default> 💡 语言，多个用逗号 "," 隔开
+            - release_date: str = <default> 💡 发行日期，格式为 YYYY-MM-DD
+            - type_id: int | str = <default> 💡 类型 id
+            - type_id[]: int | str
+            - ...
+            - type_id[0]: int | str
+            - type_id[1]: int | str
+            - ...
+            - related_id[][{related_id}]: str 💡 相关人员，是 id 到 名字 的映射关系
+            - ...
+            - rating[1]: int | float | str = <default> 💡 评分：豆瓣
+            - rating[2]: int | float | str = <default> 💡 评分：猫眼
+            - rating[3]: int | float | str = <default> 💡 评分：烂番茄
+            - rating[4]: int | float | str = <default> 💡 评分：优酷
+            - rating[5]: int | float | str = <default> 💡 评分：115
+            - rating[6]: int | float | str = <default> 💡 评分：IMDB
+            - extra_info: str = <default> 💡 附加信息，是一个 JSON object 序列化为字符串，初始值为 '{"version":"","timbre":"","track":"","scene":""}'
+            - is_delete: 0 | 1 = <default> 💡 是否删除
+        """
+        api = complete_url("/multimedia/watch", base_url=base_url)
+        if isinstance(payload, dict):
+            payload.setdefault("channel_id", 5)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_recent_listen(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_recent_listen(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_recent_listen(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听：最近在听
+
+        GET https://webapi.115.com/multimedia/recent_listen
+
+        :payload:
+            - channel_id: int = 1
+            - limit: int = 32
+            - offset: int = 0
+        """
+        api = complete_url("/multimedia/recent_listen", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"offset": payload}
+        payload = {"channel_id": 1, "limit": 32, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_recent_listen_update(
+        self, 
+        payload: dict = {}, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_recent_listen_update(
+        self, 
+        payload: dict = {}, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_recent_listen_update(
+        self, 
+        payload: dict = {}, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听：更新 最近在听
+
+        POST https://webapi.115.com/multimedia/recent_listen
+
+        .. note::
+            目前仅支持 clear 操作，即 清空所有记录
+
+        :payload:
+            - channel_id: int = 1
+            - action: str = "clear"
+        """
+        api = complete_url("/multimedia/recent_listen", base_url=base_url)
+        payload = {"channel_id": 1, "action": "clear", **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_recent_watch(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_recent_watch(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_recent_watch(
+        self, 
+        payload: int | dict = 0, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我看：最近观看
+
+        GET https://webapi.115.com/multimedia/recent_watch
+
+        :payload:
+            - channel_id: int = 5
+            - limit: int = 32
+            - offset: int = 0
+        """
+        api = complete_url("/multimedia/recent_watch", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"offset": payload}
+        payload = {"channel_id": 5, "limit": 32, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_recent_watch_update(
+        self, 
+        payload: dict = {}, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_recent_watch_update(
+        self, 
+        payload: dict = {}, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_recent_watch_update(
+        self, 
+        payload: dict = {}, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听：更新 最近在听
+
+        POST https://webapi.115.com/multimedia/recent_watch
+
+        .. note::
+            目前仅支持 clear 操作，即 清空所有记录
+
+        :payload:
+            - channel_id: int = 5
+            - action: str = "clear"
+        """
+        api = complete_url("/multimedia/recent_watch", base_url=base_url)
+        payload = {"channel_id": 5, "action": "clear", **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_relate_file(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_relate_file(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_relate_file(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听&我看：罗列专辑/详情的关联文件
+
+        GET https://webapi.115.com/multimedia/relate_file
+
+        :payload:
+            - multimedia_id: int 💡 专辑/详情 id
+            - channel_id: int = 1 💡 频道 id，已知：1:音乐 5:视频
+            - limit: int = 32
+            - offset: int = 0
+            - o: "custom_sort" | "file_name" | "file_size" | "created_time" = <default> 💡 排序依据
+            - asc: 0 | 1 = <default> 💡 是否升序排列
+        """
+        api = complete_url("/multimedia/relate_file", base_url=base_url)
+        payload = {"channel_id": 1, "limit": 32, **payload}
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_relate_file_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_relate_file_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_relate_file_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听&我看：更新专辑/详情的关联文件
+
+        POST https://webapi.115.com/multimedia/relate_file
+
+        .. note::
+            指定 `multimedia_id` 时，则针对相应的专辑/详情进行文件增删；未指定时，则自动创建新的专辑/详情
+
+        :payload:
+            - file_ids: int | str 💡 文件 id，多个用逗号 "," 隔开
+            - op: str = "relate" 💡 已知："relate":添加 "delete":删除
+            - channel_id: int = 1 💡 频道 id，已知：1:音乐 5:视频
+            - multimedia_id: int = <default> 💡 专辑/详情 id
+            - one_by_one: 0 | 1 = <default> 💡 （未指定 `multimedia_id` 时生效）是否分别创建专辑/详情：0:为所选文件创建为一个详情页 1:为每个文件创建单独的详情页
+        """
+        api = complete_url("/multimedia/relate_file", base_url=base_url)
+        payload = {"channel_id": 1, "action": "clear", **payload}
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_related(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_related(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_related(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听&我看：人员列表
+
+        GET https://webapi.115.com/multimedia/related
+
+        :payload:
+            - channel_id: int = 1 💡 频道 id，已知：1:音乐 5:视频
+        """
+        api = complete_url("/multimedia/related", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"channel_id": payload}
+        else:
+            payload.setdefault("channel_id", 1)
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_related_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_related_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_related_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听&我看：更新人员
+
+        GET https://webapi.115.com/multimedia/related
+
+        .. note::
+            未指定 `related_id` 时，则是添加（此时需要指定 `related_name`）；指定时，则是修改
+
+        .. todo::
+            暂不支持删除人员
+
+        :payload:
+            - related_name: str 💡 相关人员名字
+            - channel_id: int = 1 💡 频道 id，已知：1:音乐 5:视频
+            - related_id: int = <default> 💡 相关人员 id
+        """
+        api = complete_url("/multimedia/related", base_url=base_url)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_type(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_type(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_type(
+        self, 
+        payload: int | dict = 1, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听&我看：分类列表
+
+        GET https://webapi.115.com/multimedia/type
+
+        :payload:
+            - channel_id: int = 1 💡 频道 id，已知：1:音乐 5:视频
+        """
+        api = complete_url("/multimedia/type", base_url=base_url)
+        if isinstance(payload, int):
+            payload = {"channel_id": payload}
+        else:
+            payload.setdefault("channel_id", 1)
+        return self.request(url=api, params=payload, async_=async_, **request_kwargs)
+
+    @overload
+    def multimedia_type_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False] = False, 
+        **request_kwargs, 
+    ) -> dict:
+        ...
+    @overload
+    def multimedia_type_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[True], 
+        **request_kwargs, 
+    ) -> Coroutine[Any, Any, dict]:
+        ...
+    def multimedia_type_update(
+        self, 
+        payload: dict, 
+        /, 
+        base_url: str | Callable[[], str] = "https://webapi.115.com", 
+        *, 
+        async_: Literal[False, True] = False, 
+        **request_kwargs, 
+    ) -> dict | Coroutine[Any, Any, dict]:
+        """我听&我看：更新分类
+
+        GET https://webapi.115.com/multimedia/type
+
+        .. note::
+            目前支持创建最多 3 级分类，`parent_id=0` 时为 1 级分类
+
+        .. note::
+            未指定 `type_id` 时，则是添加（此时需要指定 `type_name`）；指定时，则是修改
+
+        .. todo::
+            暂不支持删除分类
+
+        :payload:
+            - channel_id: int = 1 💡 频道 id，已知：1:音乐 5:视频
+            - parent_id: int = <default> 💡 上级分类 id
+            - type_id: int = <default> 💡 分类 id
+            - type_name: str = <default> 💡 分类名称
+            - sort: int = <default> 💡 序号
+        """
+        api = complete_url("/multimedia/type", base_url=base_url)
+        return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     ########## Note API ##########
 
@@ -18966,11 +19383,13 @@ class P115Client(P115OpenClient):
         GET https://lixian.115.com/lixian/?ac=task_lists
 
         :payload:
-            - page: int | str = 1
-            - stat: int = 0 💡 目前已知：9:下载失败 11:已完成 12:正在下载
+            - page: int = 1
+            - page_size: int = 30
+            - stat: int = <default> 💡 已知：9:已失败 11:已完成 12:进行中
         """
         if isinstance(payload, int):
             payload = {"page": payload}
+        payload.setdefault("page_size", 30)
         return self._offline_request(
             payload, 
             "task_lists", 
@@ -20349,9 +20768,15 @@ class P115Client(P115OpenClient):
 
         GET https://webapi.115.com/share/slist
 
+        .. todo::
+            暂时不清楚 order 有哪些取值
+
         :payload:
             - limit: int = 32
             - offset: int = 0
+            - order: str = <default> 💡 排序依据，例如 "create_time"
+            - asc: 0 | 1 = <default> 💡 是否升序排列
+            - show_cancel_share: 0 | 1 = 0
         """
         api = complete_url("/share/slist", base_url=base_url)
         if isinstance(payload, int):
@@ -20863,7 +21288,6 @@ class P115Client(P115OpenClient):
         if not isinstance(payload, dict):
             payload = {"file_id": payload}
         if url:
-            from .tool import share_extract_payload
             share_payload = share_extract_payload(url)
             payload["share_code"] = share_payload["share_code"]
             payload["receive_code"] = share_payload["receive_code"] or ""
@@ -21878,7 +22302,11 @@ class P115Client(P115OpenClient):
         POST https://uplb.115.com/3.0/sampleinitupload.php
         """
         api = complete_url("/3.0/sampleinitupload.php", base_url=base_url)
-        payload = {"filename": filename, "target": f"U_1_{pid}"}
+        if isinstance(pid, str) and pid.startswith("U_"):
+            target = pid
+        else:
+            target = f"U_1_{pid}"
+        payload = {"filename": filename, "target": target}
         return self.request(url=api, method="POST", data=payload, async_=async_, **request_kwargs)
 
     @overload # type: ignore
@@ -22015,18 +22443,22 @@ class P115Client(P115OpenClient):
         :param read_range_bytes_or_hash: 调用以获取 2 次验证的数据或计算 sha1，接受一个数据范围，格式符合:
             `HTTP Range Requests <https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests>`_，
             返回值如果是 str，则视为计算好的 sha1，如果为 Buffer，则视为数据（之后会被计算 sha1）
-        :param pid: 上传文件到此目录的 id
+        :param pid: 上传文件到此目录的 id，或者指定的 target（格式为 f"U_{aid}_{pid}"，例如一次性封面上传目标 "U_3_-15"）
         :param async_: 是否异步
         :param request_kwargs: 其余请求参数
 
         :return: 接口响应
         """
         def gen_step():
+            if isinstance(pid, str) and pid.startswith("U_"):
+                target = pid
+            else:
+                target = f"U_1_{pid}"
             payload = {
                 "filename": filename, 
                 "fileid": filesha1.upper(), 
                 "filesize": filesize, 
-                "target": f"U_1_{pid}", 
+                "target": target, 
             }
             resp = yield self.upload_init(
                 payload, 
@@ -22102,13 +22534,15 @@ class P115Client(P115OpenClient):
             不支持秒传，但也不必传文件大小和 sha1
 
         :param file: 待上传的文件
-        :param pid: 上传文件到此目录的 id 或 pickcode
+        :param pid: 上传文件到此目录的 id 或 pickcode，或者指定的 target（格式为 f"U_{aid}_{pid}"，例如一次性封面上传目标 "U_3_-15"）
         :param filename: 文件名，如果为空，则会自动确定
         :param async_: 是否异步
         :param request_kwargs: 其余请求参数
 
         :return: 接口响应
         """
+        if isinstance(pid, str) and not pid.startswith("U_"):
+            pid = self.to_id(pid)
         def gen_step():
             nonlocal file, filename
             if not isinstance(file, (Buffer, SupportsRead)):
@@ -22162,7 +22596,7 @@ class P115Client(P115OpenClient):
                 filename = str(uuid4())
             resp = yield self.upload_sample_init(
                 filename, 
-                pid=self.to_id(pid), 
+                pid=pid, 
                 async_=async_, 
                 **request_kwargs, 
             )
@@ -22247,7 +22681,7 @@ class P115Client(P115OpenClient):
             ``partsize > 0`` 时，不要把 ``partsize`` 设置得太小，起码得 10 MB (10485760) 以上
 
         :param file: 待上传的文件
-        :param pid: 上传文件到此目录的 id 或 pickcode
+        :param pid: 上传文件到此目录的 id 或 pickcode，或者指定的 target（格式为 f"U_{aid}_{pid}"，例如一次性封面上传目标 "U_3_-15"）
         :param filename: 文件名，如果为空，则会自动确定
         :param filesha1: 文件的 sha1，如果为空，则会自动确定
         :param filesize: 文件大小，如果为 -1，则会自动确定
@@ -22260,9 +22694,11 @@ class P115Client(P115OpenClient):
 
         :return: 接口响应
         """
+        if isinstance(pid, str) and not pid.startswith("U_"):
+            pid = self.to_id(pid)
         return upload(
             file=file, 
-            pid=self.to_id(pid), 
+            pid=pid, 
             filename=filename, 
             filesha1=filesha1, 
             filesize=filesize, 
@@ -23669,4 +24105,5 @@ with temp_globals():
             except KeyError:
                 CLIENT_API_METHODS_MAP[api] = [name]
 
+# TODO: .request 方法支持 payload 参数和 method 参数，根据 method 来决定 payload 时 query 还是 body
 # TODO: 支持对接口调用进行频率统计，默认就会开启，配置项目：1. 允许记录多少条或者多大时间窗口，默认记录最近 10 条（无限时间窗口） 2. 可以设置一个 key 函数，默认用 (url, method) 为 key 3. 数据和统计由单独的对象来承载，就行 headers 和 cookies 属性那样，可以被随意查看，这个对象由各种配置项目，可以随意修改，client初始化时候支持传入此对象 4. 可以修改时间窗口和数量限制 5. 可以获取数据，就像字典一样使用 dict[key, list[timestamp]] 6. 有一些做好的统计方法，你也可以自己来执行统计 7. 即使有些历史数据被移除，有些统计方法可以持续更新，覆盖从早到现在的所有数据，比如 加总、计数

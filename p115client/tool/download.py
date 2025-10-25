@@ -50,18 +50,16 @@ from iterutils import (
     run_gen_step_iter, through, with_iter_next, Yield, YieldFrom, 
 )
 from orjson import loads
-from p115client import (
-    check_response, normalize_attr, normalize_attr_simple, P115Client, 
-    P115OpenClient, P115URL, 
-)
+from p115client import check_response, P115Client, P115OpenClient, P115URL
 from p115client.const import ID_TO_DIRNODE_CACHE
 from p115client.exception import P115Warning
+from p115client.util import reduce_image_url_layers
 from p115pickcode import to_id
 
+from .attr import normalize_attr, normalize_attr_simple
 from .iterdir import (
     iterdir, iter_files, iter_files_shortcut, unescape_115_charref, 
 )
-from .util import reduce_image_url_layers
 
 
 # TODO: 之后加上并发拉取，以加快速度

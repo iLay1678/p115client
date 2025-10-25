@@ -3,6 +3,8 @@
 
 __author__ = "ChenyangGao <https://chenyanggao.github.io>"
 
+from p115client.util import *
+
 from .attr import *
 from .auth import *
 from .download import *
@@ -16,5 +18,4 @@ from .offline import *
 from .pool import *
 from .updatedb import *
 from .upload import *
-from .util import *
 from .xys import *

@@ -1,9 +1,9 @@
 # `util`
 
-其它工具函数
+一些工具函数
 
 ```{eval-rst}
-.. automodule:: p115client.tool.util
+.. automodule:: p115client.util
     :show-inheritance:
     :members:
 ```

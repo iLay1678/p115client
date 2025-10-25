@@ -28,9 +28,7 @@ from iterutils import (
     as_gen_step, foreach, run_gen_step, run_gen_step_iter, 
     with_iter_next, YieldFrom, 
 )
-from p115client import (
-    check_response, normalize_attr_simple, P115Client, P115OpenClient, 
-)
+from p115client import check_response, P115Client, P115OpenClient
 from p115oss import (
     oss_upload_init, oss_multipart_upload_init, oss_multipart_upload_complete, 
     oss_multipart_upload_url, oss_multipart_part_iter, oss_multipart_upload_part_iter, 
@@ -38,6 +36,7 @@ from p115oss import (
 from p115pickcode import to_id
 from yarl import URL
 
+from .attr import normalize_attr_simple
 from .download import iter_download_files
 from .iterdir import iterdir, iter_files_with_path, unescape_115_charref
 
