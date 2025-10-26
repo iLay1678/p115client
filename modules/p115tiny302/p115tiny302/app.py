@@ -22,10 +22,8 @@ from cachedict import LRUDict, TLRUDict, TTLDict
 from dicttools import get_first
 from orjson import dumps
 from posixpatht import normpath, joins
-from p115client import (
-    check_response, normalize_attr, P115Client, P115ID, P115URL, P115OSError, 
-)
-from p115client.tool import get_id_to_path, share_get_id_to_path
+from p115client import check_response, P115Client, P115ID, P115URL, P115OSError
+from p115client.tool import get_id_to_path, normalize_attr, share_get_id_to_path
 from p115pickcode import is_valid_pickcode
 
 
@@ -318,7 +316,6 @@ def make_application(
         path: str = "", 
         name: str = "", 
         name2: str = "", 
-        value: str = "", 
         share_code: str = "", 
         receive_code: str = "", 
         size: int = -1, 
@@ -335,8 +332,6 @@ def make_application(
         def check_sign(val, /):
             if not token:
                 return None
-            if value:
-                val = value
             if sign != calc_sha1(bytes(f"302@115-{token}-{t}-{val}", "utf-8")).hexdigest():
                 return json({"state": False, "message": "invalid sign"}, 403)
             elif t > 0 and t <= get_timestamp():

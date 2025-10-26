@@ -78,8 +78,6 @@ usage: p115open302 [-h] [-c COOKIES] [-cp COOKIES_PATH] [-a APP_ID]
 
         http://localhost:8000/{name2}?id={id}&pickcode={pickcode}&sha1={sha1}&name={name}&path={path}
 
-    4. 但如果你传入了查询参数 value，且不是空字符串，那么就强制用这个值来计算签名，优先级高于上一条规则
-
 🌰 查询示例：
 
     1. 查询 id

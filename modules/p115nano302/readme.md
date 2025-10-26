@@ -72,8 +72,6 @@ usage:  [-h] [-c COOKIES] [-cp COOKIES_PATH] [-p PASSWORD] [-t TOKEN] [-H HOST]
 
         http://localhost:8000/{name2}?id={id}&pickcode={pickcode}&sha1={sha1}&name={name}&path={path}
 
-    4. 但如果你传入了查询参数 value，且不是空字符串，那么就强制用这个值来计算签名，优先级高于上一条规则
-
 🌰 更新 cookies
 
 通过命令行参数 -p/--password 指定密码后，你就可以一次性更新很多个 cookies，使用接口（请求时需携带和命令行传入的相同的密码）

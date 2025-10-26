@@ -23,62 +23,39 @@ _CACHE_DIR.mkdir(exist_ok=True)
 
 #: 目前可用的登录设备
 AVAILABLE_APPS: Final[tuple[str, ...]] = (
-    "web", "ios", "115ios", "android", "115android", "115ipad", "tv", "apple_tv", 
-    "qandroid", "wechatmini", "alipaymini", "harmony", 
+    "android", "115android", "qandroid", "ios", "115ios", "qios", 
+    "ipad", "115ipad", "qipad", "tv", "apple_tv", "wechatmini", 
+    "alipaymini", "harmony", "web", 
 )
 
 #: 目前已知的登录设备和对应的 ssoent
 APP_TO_SSOENT: Final[dict[str, str]] = {
-    "web": "A1", 
-    "desktop": "A1",  # 临时
-    "ios": "D1", 
-    "bios": "D1",     # 临时
-    "qios": "D1",     # 临时
-    "115ios": "D3", 
-    "android": "F1", 
-    "bandroid": "F1", # 临时
-    "115android": "F3", 
-    "ipad": "H1",     # 临时 
-    "115ipad": "H3", 
-    "tv": "I1", 
-    "apple_tv": "I2", 
-    "qandroid": "M1", 
-    "windows": "P1", 
-    "mac": "P2", 
-    "linux": "P3", 
-    "wechatmini": "R1", 
-    "alipaymini": "R2", 
-    "harmony": "S1", 
+    "web": "A1",        # 115生活_网页端
+    "desktop": "A1", 
+    "ios": "D1",        # 115生活_苹果端
+    "bios": "D2", 
+    "115ios": "D3",     # 115_苹果端
+    "android": "F1",    # 115生活_安卓端
+    "bandroid": "F2", 
+    "115android": "F3", # 115_安卓端
+    "ipad": "H1",       # 115生活_苹果平板端
+    "bipad": "H2", 
+    "115ipad": "H3",    # 115_苹果平板端
+    "tv": "I1",         # 115生活_安卓电视端
+    "apple_tv": "I2",   # 115生活_苹果电视端
+    "qandroid": "M1",   # 115管理_安卓端
+    "qios": "N1",       # 115管理_苹果端
+    "qipad": "O1",      # 115管理_苹果平板端
+    "windows": "P1",    # 115生活_Windows端
+    "mac": "P2",        # 115生活_macOS端
+    "linux": "P3",      # 115生活_Linux端
+    "wechatmini": "R1", # 115生活_微信小程序端
+    "alipaymini": "R2", # 115生活_支付宝小程序
+    "harmony": "S1",    # 115_鸿蒙端
 }
 
 #: 目前已知的 ssoent 和对应的登录设备，一部分因为不知道具体的设备名，所以使用目前可用的设备名，作为临时代替
-SSOENT_TO_APP: Final[dict[str, str]] = {
-    "A1": "web", 
-    "A2": "android", # 临时代替
-    "A3": "ios",     # 临时代替
-    "A4": "115ipad", # 临时代替
-    "B1": "android", # 临时代替
-    "D1": "ios", 
-    "D2": "ios",     # 临时代替
-    "D3": "115ios",  
-    "F1": "android", 
-    "F2": "android", # 临时代替
-    "F3": "115android", 
-    "H1": "115ipad", # 临时代替
-    "H2": "115ipad", # 临时代替
-    "H3": "115ipad", 
-    "I1": "tv", 
-    "I2": "apple_tv", 
-    "O1": "ipad",    # 临时代替
-    "M1": "qandroid", 
-    "N1": "ios",     # 临时代替
-    "P1": "windows", 
-    "P2": "mac", 
-    "P3": "linux", 
-    "R1": "wechatmini", 
-    "R2": "alipaymini", 
-    "S1": "harmony", 
-}
+SSOENT_TO_APP: Final[dict[str, str]] = {v: k for k, v in reversed(APP_TO_SSOENT.items())}
 
 #: 所有已封装的方法名和对应的 115 接口
 CLIENT_METHOD_API_MAP: Final[dict[str, str]] = {}

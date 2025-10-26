@@ -40,8 +40,6 @@ __doc__ = """\
 
         \x1b[4;34mhttp://localhost:8000/{\x1b[1;3;36mname2\x1b[0m\x1b[4;34m}?id={\x1b[1;3;36mid\x1b[0m\x1b[4;34m}&pickcode={\x1b[1;3;36mpickcode\x1b[0m\x1b[4;34m}&sha1={\x1b[1;3;36msha1\x1b[0m\x1b[4;34m}&name={\x1b[1;3;36mname\x1b[0m\x1b[4;34m}&path={\x1b[1;3;36mpath\x1b[0m\x1b[4;34m}\x1b[0m
 
-    4. 但如果你传入了查询参数 \x1b[3;36mvalue\x1b[0m，且不是空字符串，那么就强制用这个值来计算签名，优先级高于上一条规则
-
 🌰 更新 cookies
 
 通过命令行参数 -p/--password 指定密码后，你就可以一次性更新很多个 cookies，使用接口（请求时需携带和命令行传入的相同的密码）

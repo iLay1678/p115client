@@ -409,7 +409,6 @@ def make_application(
         name2: str = "", 
         size: int = -1, 
         cid: int = 0, 
-        value: str = "", 
         user_id: str = "", 
         refresh: bool = False, 
         app: str = "", 
@@ -418,8 +417,6 @@ def make_application(
     ) -> Response:
         def check_sign(val, /) -> None | Response:
             if token:
-                if value:
-                    val = value
                 if sign != calc_sha1(bytes(f"302@115-{token}-{t}-{val}", "utf-8")).hexdigest():
                     return json({"state": False, "message": "invalid sign"}, 403)
                 elif t > 0 and t <= get_timestamp():

@@ -183,7 +183,6 @@ def make_application(
         path: str = "", 
         name: str = "", 
         name2: str = "", 
-        value: str = "", 
         size: int = -1, 
         method: str = "", 
         time: int = -1, 
@@ -197,8 +196,6 @@ def make_application(
         def check_sign(val, /):
             if not token:
                 return None
-            if value:
-                val = value
             if sign != calc_sha1(bytes(f"302@115-{token}-{t}-{val}", "utf-8")).hexdigest():
                 return json({"state": False, "message": "invalid sign"}, 403)
             elif t > 0 and t <= get_timestamp():
