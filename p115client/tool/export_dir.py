@@ -184,7 +184,7 @@ def parse_export_dir_as_path_iter(
         if escape:
             from posixpatht import escape
         else:
-            from .util import posix_escape_name as escape
+            from p115client.util import posix_escape_name as escape
     escape = cast(None | Callable[[str], str], escape)
     def gen_step():
         it = ensure_aiter(file, threaded=True) if async_ else file

@@ -13,7 +13,7 @@ __doc__ = "这个模块提供了一些工具函数，且不依赖于 p115client.
 from collections.abc import Callable, Mapping, Sequence
 from re import compile as re_compile
 from string import digits, hexdigits
-from typing import cast, Final, NotRequired, TypedDict
+from typing import cast, Any, Final, NotRequired, TypedDict
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from p115pickcode import is_valid_pickcode
@@ -37,7 +37,7 @@ def complete_url(
     app: str | Callable[[], str] = "", 
     domain: str | Callable[[], str] = "", 
     as_query: bool = False, 
-    query: Mapping[str, str] | Sequence[tuple[str, str]] = (), 
+    query: Mapping[str, Any] | Sequence[tuple[str, Any]] = (), 
 ) -> str:
     """完整 HTTP Web 接口 URL
 
